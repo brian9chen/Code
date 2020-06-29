@@ -1,0 +1,26 @@
+%% Add zeros to the end of one sac file to let it have the same length of
+%% another one
+function addzero_end(fn_sac1,fn_sac2)
+
+%% Read the two sac files in
+sacst1 = SACST_fread({fn_sac1});
+sacst2 = SACST_fread({fn_sac2});
+
+%% Get the number of points to add
+n1 = sacst1.npts;
+n2 = sacst2.npts;
+N = max(n1,n2);
+
+%% Add the point
+sac1 = sacst1.data;
+sac2 = sacst2.data;
+sac1 = [sac1;zeros(N-n1,1)];
+sac2 = [sac2;zeros(N-n2,1)];
+
+%% Write the new sac file over the older one
+sacst1.data = sac1;
+sacst2.data = sac2;
+SACST_fwrite(sacst1,{fn_sac1});
+SACST_fwrite(sacst2,{fn_sac2});
+
+end

@@ -1,0 +1,209 @@
+function [ sacst_deconv ] = SACST_FDdeconv( varargin )
+%Deconvolution in frequency domain with pre-whitenning regularization 
+%--------------------------------------------------------------------------
+%Syntax:
+%
+%   sacst_deconv = SACST_FDdeconv( 'PropertyName', PropertyValue )
+%--------------------------------------------------------------------------
+%Description:
+%
+%   sacst_deconv = SACST_FDdeconv( 'PropertyName', PropertyValue )
+%   calculates deconvolution from SACST given in the parameters (see below 'PropertyName')
+%--------------------------------------------------------------------------
+%PropertyName   | PropertyValue |  Description
+%
+%   'source'    | type: SACST   | SACST of source
+%   'record'    | type: SACST   | SACST of record
+%   'ref'       | '0'           | reference time marker for time cut
+%   'stwin'     | [-5 100]       | source time window
+%   'rtwin'     | [-5 100]       | record time window
+%   'waterlevel'| 0.05          | water-level 
+%   'gausswidth'| 2.5           | frequency band width of Gaussian filter
+%--------------------------------------------------------------------------
+%Notes:
+%
+% 1) In freqeuncy domain, Quotient =
+%   Numerator*Conj(Denominator)/max(Denominator^2,waterlevel*max(Denominator^2));
+% 2) Before inverse Fourier transform, Quotient is multiplied by
+%   GaussWeight = exp(-w^2/4/gausswidth^2);
+%
+% Reference: lecture notes by Lev Vinik, Receiver function techniques
+%--------------------------------------------------------------------------
+%History:
+%
+%   [2011-12-16]: created
+%   [2011-12-18]: modified, add twin_denom and twin_numer
+%   [2012-02-19]: modified, add help and use new SACST as input and output
+%   [2012-02-22]: isnumeric is used instead of isscalar, because isscalar
+%   can't tell the difference between a number and a single char.
+%--------------------------------------------------------------------------
+
+%% Parse and check parameters
+
+% define the object: inputParser
+p = inputParser;
+
+% get parameters
+p.addParamValue('source',[],@isstruct);
+p.addParamValue('record',[],@isstruct);
+p.addParamValue('ref','0',@ischar);
+p.addParamValue('stwin',[-5 100],@(x) isvector(x) & length(x)==2);
+p.addParamValue('rtwin',[-5 100],@(x) isvector(x) & length(x)==2);
+% p.addParamValue('ntwin',[-50 -10],@(x) isvector(x) & length(x)==2);
+% p.addParamValue('stref','a',@ischar);
+% p.addParamValue('rtref','a',@ischar);
+% p.addParamValue('ntref','a',@ischar);
+p.addParamValue('waterlevel',0.05,@(x) isnumeric(x) & x>0);
+p.addParamValue('gausswidth',2.5,@(x) isnumeric(x) & x>0);
+% p.KeepUnmatched = true;
+
+% parsing arguments
+p.parse(varargin{:});
+
+%
+sacst_source = p.Results.source;
+sacst_record = p.Results.record;
+tref = p.Results.ref;
+twin_source = p.Results.stwin;
+twin_record = p.Results.rtwin;
+% twin_noise = p.Results.ntwin;
+% tref_source = p.Results.stref;
+% tref_record = p.Results.rtref;
+% tref_noise = p.Results.ntref;
+waterlevel = p.Results.waterlevel;
+gausswidth = p.Results.gausswidth;
+
+%
+msgID = 'SACST_FDdeconv:argChk';
+Nsource = length(sacst_source);
+Nrecord = length(sacst_record);
+iscommonsource = false;
+if Nsource==1 && Nrecord>1
+    iscommonsource = true;
+    disp 'Using one common source for multiple records!'
+elseif Nsource < Nrecord
+    errmsg = 'Nsource should equal to or larger than Nrecord!';
+    error(msgID,errmsg);
+end
+
+%% Deconvolution loop
+% initialize
+sacst_deconv = SACST_new(Nrecord);
+%
+for irecord = 1:Nrecord
+    try 
+        if iscommonsource
+            sacst_deconv(irecord) = deconvSAC(sacst_source(irecord),sacst_record,tref,twin_source,twin_record);
+        else
+            sacst_deconv(irecord) = deconvSAC(sacst_source(irecord),sacst_record(irecord),tref,twin_source,twin_record);
+        end
+    catch errmsg
+        disp -------------------------------
+        fprintf('Error in deconvolution record #%d\n',irecord)
+        disp -------------------------------
+%         fprintf('Error in reading %s at Index: %d\n\n',fn_sac1,i)
+%         fprintf('Following is the Report:\n')
+        fprintf('\n%s\n',errmsg.getReport)
+        %
+%         sacst_deconv(irecord) = SACST_new;
+    end
+end
+
+%% Nested function
+
+% deconvolution from a single record and source pair
+function sacst1_deconv = deconvSAC(sacst1_source,sacst1_record,tref,twin_source,twin_record)
+
+% cut time window cut and interpolate data to the same sampling interval
+dt = min(sacst1_source.delta,sacst1_record.delta);
+
+ts_source = (min(twin_source):dt:max(twin_source))';
+ts_record = (min(twin_record):dt:max(twin_record))';
+% ts_noise = (min(twin_noise):dt:max(twin_noise))';
+ 
+sacst1_source_cut = SACST_interp(sacst1_source,ts_source,'ref',tref,'ckNaN',1);
+sacst1_record_cut = SACST_interp(sacst1_record,ts_record,'ref',tref,'ckNaN',1);
+% sacst_noise = SACST_interp(sacst1_source,ts_noise,tref_noise);
+
+% Discrete Fourier Transform
+Npts_source = sacst1_source_cut.npts;
+Npts_record = sacst1_record_cut.npts;
+
+x_source = sacst1_source_cut.data;
+x_record = sacst1_record_cut.data;
+% x_noise = sacst_noise.data;
+
+% spectrum
+Fx_record = fft([x_record;zeros(Npts_source-1,1)]);
+Fx_source = fft([x_source;zeros(Npts_record-1,1)]);
+% Fx_noise = fft(x_noise);
+
+% angular freqency sample points
+Npts = length(Fx_record);
+dw = 2*pi/Npts/dt;
+N_half = (Npts-2+mod(Npts,2))/2;
+w = dw*[0:N_half,pi/dt*ones(1-mod(Npts,2),1),-N_half:1:-1]';
+
+% power spectrum of recordator
+F2x_source = abs(Fx_source).^2;
+
+% Water-level division
+F2_wl = waterlevel*max(F2x_source);
+
+% Gaussian low-pass filter
+gaussfilter = exp(-w.^2/4/gausswidth^2);
+
+% Water-level division
+Fx_deconv = (1+F2_wl/mean(F2x_source))*Fx_record.*conj(Fx_source)./(F2x_source+F2_wl);
+Fx_deconv = Fx_deconv.*gaussfilter;
+
+% Inverse DFT
+
+x_deconv = ifft(Fx_deconv,'symmetric');
+
+% t0_source = eval(['sacst1_source_cut.',tref]);
+% t0_record = eval(['sacst1_record_cut.',tref]);
+t0_source = SACST_gmt2sec(sacst1_source_cut,tref)-SACST_gmt2sec(sacst1_source_cut,'0');
+t0_record = SACST_gmt2sec(sacst1_record_cut,tref)-SACST_gmt2sec(sacst1_record_cut,'0');
+
+tb_source = sacst1_source_cut.b;
+tb_record = sacst1_record_cut.b;
+
+te_source = sacst1_source_cut.e;
+% te_record = sacst1_source_cut.e;
+
+tlag_pos = (t0_source-tb_source)-(t0_record-tb_record);
+tlag_neg = -((te_source-t0_source)+(t0_record-tb_record));
+
+ts_deconv = [tlag_pos+dt*(0:Npts_record-1),tlag_neg+dt*(0:Npts_source-2)];
+
+% ts_quot = dt*[0:N_half,pi/dt*ones(1-mod(Npts,2),1),-N_half:1:-1]';
+
+[ts_deconv,IX] = sort(ts_deconv);
+
+% ind_negative = ts_quot<0;
+% ind_nonneg = logical(1-ind_negative);
+
+x_deconv = x_deconv(IX);
+% quot = [quot(ind_negative);quot(ind_nonneg)];
+
+%write out SACST
+sacst1_deconv = sacst1_record;
+
+sacst1_deconv.data = x_deconv;
+
+kcmpnm = [sacst1_record.kcmpnm,'/',sacst1_source.kcmpnm];
+sacst1_deconv.kcmpnm = kcmpnm(kcmpnm~=0 & kcmpnm~=32); % trim all blanks off
+sacst1_deconv.cmpaz = -12345;
+sacst1_deconv.cmpinc = -12345;
+%
+ref_time = SACST_gmt2sec(sacst1_record,tref)-SACST_gmt2sec(sacst1_record,'0');
+%
+sacst1_deconv.b = min(ts_deconv)+ref_time;
+sacst1_deconv.e = max(ts_deconv)+ref_time;
+sacst1_deconv.npts = length(x_deconv);
+%
+sacst1_deconv.delta = dt;
+end
+
+end

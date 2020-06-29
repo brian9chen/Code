@@ -1,0 +1,8 @@
+function [ abstime ] = SHD_gmt2sec( sachd, tmarker )
+%GMT2SEC_SHD calculates the absolute time in sec from sac header structure
+% Usage: [ abstime ] = gmt2sec_SHD( sachd )
+
+%%
+evla(['sachd.',tmarker])
+abstime = yjd2sec(sachd.nzyear,sachd.nzjday,sachd.nzhour,sachd.nzmin,sachd.nzsec+sachd.nzmsec/1000)+evla(['sachd.',tmarker]);
+end
